@@ -11,6 +11,8 @@ import Dashboard from './pages/Dashboard';
 import Editor from './pages/Editor';
 import Host from './pages/Host';
 import Report from './pages/Report';
+import AssignmentPlay from './pages/AssignmentPlay';
+import { Explore, PublicQuiz } from './pages/Explore';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -36,7 +38,11 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
           <Route path="/edit/:id" element={<RequireAuth><Editor /></RequireAuth>} />
           <Route path="/host/:pin" element={<Host />} />
-          <Route path="/reports/:id" element={<RequireAuth><Report /></RequireAuth>} />
+          <Route path="/reports/:id" element={<RequireAuth><Report kind="live" /></RequireAuth>} />
+          <Route path="/tugas-laporan/:id" element={<RequireAuth><Report kind="assignment" /></RequireAuth>} />
+          <Route path="/tugas" element={<AssignmentPlay />} />
+          <Route path="/jelajahi" element={<Explore />} />
+          <Route path="/q/:id" element={<PublicQuiz />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>

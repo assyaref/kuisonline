@@ -1,13 +1,15 @@
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Assignments } from './assignments.js';
 import { Store } from './db.js';
 import { createApp } from './http.js';
 import { attachRealtime } from './realtime.js';
 
 export function startServer(opts: { port: number; dbFile: string; clientDir?: string; secureCookies?: boolean }) {
   const store = new Store(opts.dbFile);
-  const app = createApp(store, { secureCookies: !!opts.secureCookies, clientDir: opts.clientDir });
+  const assignments = new Assignments(store);
+  const app = createApp(store, assignments, { secureCookies: !!opts.secureCookies, clientDir: opts.clientDir });
   const httpServer = createServer(app);
   httpServer.headersTimeout = 30_000;
   httpServer.requestTimeout = 60_000;

@@ -3,10 +3,14 @@
 Platform kuis interaktif real-time: host menampilkan soal di layar besar, pemain menjawab dari HP pakai PIN 6 digit.
 
 ## Fitur
-- **Host**: daftar/login, buat & edit kuis (pilihan ganda 2–4 opsi, benar/salah, gambar, batas waktu, poin standar/ganda/tanpa poin), salin, impor/ekspor JSON.
-- **Game live**: PIN + QR code, kunci lobby, keluarkan pemain, hitung mundur, distribusi jawaban, papan skor, podium juara.
-- **Pemain**: tanpa akun, cukup PIN + nama. Skor berdasarkan kecepatan (50–100%) + bonus streak.
-- **Laporan** otomatis setelah game selesai (peringkat, % benar per soal), unduh CSV.
+- **7 tipe soal**: pilihan ganda (bisa >1 jawaban benar), benar/salah, ketik jawaban (abaikan huruf besar/aksen/tanda baca, hingga 4 variasi), puzzle urutan, slider tebak angka (dengan toleransi), polling, word cloud.
+- **Mode permainan**: Klasik, **Mode Tim** (2–6 tim, dibagi otomatis), dan **Tugas/mandiri** (PIN 7 digit, dikerjakan kapan saja sampai batas waktu, hasil diperbarui langsung).
+- **Pengaturan game**: acak urutan soal & jawaban, generator nama lucu (bisa ganti 3×), sembunyikan soal di perangkat pemain, musik on/off.
+- **Karakter gabungan orisinal**: kepala hewan/robot/monster/alien × 12 warna × 9 telinga × 7 mata × 7 mulut × 9 aksesori × 4 motif — berkedip, menari di lobby, gembira/sedih saat reveal.
+- **Animasi & suara**: musik lobby & musik menjawab orisinal (disintesis Web Audio), hitung mundur, gong waktu habis, papan skor yang bergeser, drumroll + podium + konfeti, emoji reaksi melayang dari pemain.
+- **Host**: PIN + QR, kunci lobby, keluarkan pemain, lewati waktu, layar penuh; info "X poin di belakang Y" & streak 🔥 di HP pemain.
+- **Konten**: upload gambar, kuis publik + halaman Jelajahi + salin kuis orang lain, impor/ekspor JSON, kuis contoh semua tipe.
+- **Laporan**: otomatis per game & per tugas (peringkat, tim, % benar, ringkasan jawaban), unduh CSV.
 
 ## Ketangguhan (robustness)
 - Server memegang semua logika (timer, skor, validasi) — jawaban benar tidak pernah dikirim ke pemain sebelum reveal.

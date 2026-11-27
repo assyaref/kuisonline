@@ -60,7 +60,63 @@ export class Store {
         data TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS reports_owner ON reports(owner_id, ended_at DESC);
+      CREATE TABLE IF NOT EXISTS images (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mime TEXT NOT NULL,
+        data BLOB NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS assignments (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        quiz_id TEXT,
+        pin TEXT NOT NULL,
+        title TEXT NOT NULL,
+        quiz TEXT NOT NULL,
+        settings TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        deadline INTEGER NOT NULL,
+        closed INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS assignments_owner ON assignments(owner_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS assignments_pin ON assignments(pin);
+      CREATE TABLE IF NOT EXISTS assignment_players (
+        id TEXT PRIMARY KEY,
+        assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+        player_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        name_lower TEXT NOT NULL,
+        avatar TEXT NOT NULL,
+        score INTEGER NOT NULL DEFAULT 0,
+        streak INTEGER NOT NULL DEFAULT 0,
+        correct_count INTEGER NOT NULL DEFAULT 0,
+        q_index INTEGER NOT NULL DEFAULT 0,
+        q_started_at INTEGER,
+        answers TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        finished_at INTEGER,
+        UNIQUE (assignment_id, name_lower)
+      );
+      CREATE INDEX IF NOT EXISTS ap_assignment ON assignment_players(assignment_id, score DESC);
     `);
+    const cols = this.db.prepare('PRAGMA table_info(quizzes)').all() as { name: string }[];
+    if (!cols.some((c) => c.name === 'is_public')) {
+      this.db.exec('ALTER TABLE quizzes ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+    }
+  }
+
+  /** Run fn inside a transaction (node:sqlite is synchronous so this is atomic). */
+  tx<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const r = fn();
+      this.db.exec('COMMIT');
+      return r;
+    } catch (e) {
+      this.db.exec('ROLLBACK');
+      throw e;
+    }
   }
 
   // ---------- users ----------
@@ -144,22 +200,57 @@ export class Store {
     const now = Date.now();
     this.db
       .prepare(
-        'INSERT INTO quizzes (id, owner_id, title, data, question_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO quizzes (id, owner_id, title, data, question_count, created_at, updated_at, is_public) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, ownerId, quiz.title, JSON.stringify(quiz), quiz.questions.length, now, now);
+      .run(id, ownerId, quiz.title, JSON.stringify(quiz), quiz.questions.length, now, now, quiz.public ? 1 : 0);
     return id;
   }
 
   updateQuiz(ownerId: string, id: string, quiz: QuizData): boolean {
     const r = this.db
-      .prepare('UPDATE quizzes SET title = ?, data = ?, question_count = ?, updated_at = ? WHERE id = ? AND owner_id = ?')
-      .run(quiz.title, JSON.stringify(quiz), quiz.questions.length, Date.now(), id, ownerId);
+      .prepare('UPDATE quizzes SET title = ?, data = ?, question_count = ?, updated_at = ?, is_public = ? WHERE id = ? AND owner_id = ?')
+      .run(quiz.title, JSON.stringify(quiz), quiz.questions.length, Date.now(), quiz.public ? 1 : 0, id, ownerId);
     return Number(r.changes) > 0;
   }
 
   deleteQuiz(ownerId: string, id: string): boolean {
     const r = this.db.prepare('DELETE FROM quizzes WHERE id = ? AND owner_id = ?').run(id, ownerId);
     return Number(r.changes) > 0;
+  }
+
+  getPublicQuiz(id: string): { quiz: QuizData; author: string } | null {
+    const row = this.db
+      .prepare('SELECT q.data, u.username FROM quizzes q JOIN users u ON u.id = q.owner_id WHERE q.id = ? AND q.is_public = 1')
+      .get(id) as { data: string; username: string } | undefined;
+    return row ? { quiz: JSON.parse(row.data) as QuizData, author: row.username } : null;
+  }
+
+  searchPublicQuizzes(term: string) {
+    const like = `%${term.replace(/[\\%_]/g, (c) => '\\' + c)}%`;
+    return this.db
+      .prepare(
+        `SELECT q.id, q.title, q.question_count AS questionCount, q.updated_at AS updatedAt, u.username AS author
+         FROM quizzes q JOIN users u ON u.id = q.owner_id
+         WHERE q.is_public = 1 AND q.title LIKE ? ESCAPE '\\'
+         ORDER BY q.updated_at DESC LIMIT 60`,
+      )
+      .all(like);
+  }
+
+  // ---------- images ----------
+
+  saveImage(ownerId: string, mime: string, data: Buffer): string {
+    const id = randomUUID();
+    this.db.prepare('INSERT INTO images (id, owner_id, mime, data, created_at) VALUES (?, ?, ?, ?, ?)').run(id, ownerId, mime, data, Date.now());
+    return id;
+  }
+
+  getImage(id: string): { mime: string; data: Uint8Array } | null {
+    return (this.db.prepare('SELECT mime, data FROM images WHERE id = ?').get(id) as { mime: string; data: Uint8Array } | undefined) ?? null;
+  }
+
+  countImages(ownerId: string): number {
+    return Number((this.db.prepare('SELECT COUNT(*) AS n FROM images WHERE owner_id = ?').get(ownerId) as { n: number }).n);
   }
 
   countQuizzes(ownerId: string): number {

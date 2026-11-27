@@ -2,7 +2,8 @@ import { randomInt, randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import { Server, type Socket } from 'socket.io';
 import { z } from 'zod';
-import { firstError, nameSchema, pinSchema } from '../shared/schema.js';
+import { avatarSchema, REACTIONS } from '../shared/avatar.js';
+import { firstError, gameSettingsSchema, nameSchema, pinSchema, type GameSettings } from '../shared/schema.js';
 import type { Store } from './db.js';
 import { Game, GameFailure } from './game.js';
 import { parseCookies, SESSION_COOKIE } from './http.js';
@@ -51,7 +52,7 @@ export class GameManager {
     throw new Error('Could not allocate PIN');
   }
 
-  create(ownerId: string, quizId: string): Game {
+  create(ownerId: string, quizId: string, settings: GameSettings): Game {
     const quiz = this.store.getQuiz(ownerId, quizId);
     if (!quiz) throw new GameFailure('NOT_FOUND');
     const active = [...this.games.values()].filter((g) => g.ownerId === ownerId && g.phase !== 'ended');
@@ -61,7 +62,7 @@ export class GameManager {
     }
     if (this.games.size >= MAX_GAMES) this.sweep(true);
     const pin = this.newPin();
-    const game = new Game(pin, quiz, quizId, ownerId, {
+    const game = new Game(pin, quiz, quizId, ownerId, settings, {
       onChange: (g) => this.markDirty(g.pin),
       onEnd: (g) => this.onEnd(g),
     });
@@ -160,8 +161,9 @@ export class GameManager {
     if (!game) return;
     this.io.to(`host:${pin}`).emit('host:state', game.hostView());
     const ranking = game.ranking();
+    const teams = game.teamRanking();
     for (const [playerId, sid] of this.playerSockets.get(pin) ?? []) {
-      const view = game.playerView(playerId, ranking);
+      const view = game.playerView(playerId, ranking, teams);
       if (view) this.io.to(sid).emit('player:state', view);
     }
   }
@@ -199,12 +201,17 @@ export class GameManager {
   }
 }
 
-const createSchema = z.object({ quizId: z.string().min(1).max(64) });
+const createSchema = z.object({ quizId: z.string().min(1).max(64), settings: gameSettingsSchema.default(gameSettingsSchema.parse({})) });
 const hostResumeSchema = z.object({ pin: pinSchema, hostKey: z.string().min(10).max(100) });
-const joinSchema = z.object({ pin: pinSchema, name: nameSchema });
+const joinSchema = z.object({ pin: pinSchema, name: nameSchema.optional(), avatar: avatarSchema });
+const avatarUpdateSchema = z.object({ avatar: avatarSchema });
+const reactSchema = z.object({ e: z.number().int().min(0).max(REACTIONS.length - 1) });
 const checkSchema = z.object({ pin: pinSchema });
 const playerResumeSchema = z.object({ pin: pinSchema, playerId: z.string().min(1).max(64), playerKey: z.string().min(10).max(100) });
-const answerSchema = z.object({ questionIndex: z.number().int().min(0).max(1000), choice: z.number().int().min(0).max(3) });
+const answerSchema = z.object({
+  questionIndex: z.number().int().min(0).max(1000),
+  answer: z.union([z.number().finite(), z.array(z.number().int()).max(4), z.string().max(60)]),
+});
 const kickSchema = z.object({ playerId: z.string().min(1).max(64) });
 const lockSchema = z.object({ locked: z.boolean() });
 const empty = z.object({}).passthrough().optional();
@@ -257,9 +264,9 @@ export function attachRealtime(httpServer: HttpServer, store: Store, opts: { cor
     };
 
     // ---------- host ----------
-    on('host:create', createSchema, ({ quizId }, ack) => {
+    on('host:create', createSchema, ({ quizId, settings }, ack) => {
       if (!socket.data.userId) return ack({ ok: false, error: 'Silakan login dulu' });
-      const game = manager.create(socket.data.userId, quizId);
+      const game = manager.create(socket.data.userId, quizId, settings);
       manager.bindHost(socket, game);
       ack({ ok: true, pin: game.pin, hostKey: game.hostKey });
       socket.emit('host:state', game.hostView());
@@ -299,14 +306,14 @@ export function attachRealtime(httpServer: HttpServer, store: Store, opts: { cor
       const game = manager.games.get(pin);
       if (!game || game.phase === 'ended') return ack({ ok: false, error: 'PIN tidak ditemukan' });
       if (game.locked) return ack({ ok: false, error: 'Game dikunci oleh host' });
-      ack({ ok: true, title: game.quiz.title });
+      ack({ ok: true, title: game.quiz.title, nameGenerator: game.settings.nameGenerator, teamMode: game.settings.teamMode });
     });
 
-    on('player:join', joinSchema, ({ pin, name }, ack) => {
+    on('player:join', joinSchema, ({ pin, name, avatar }, ack) => {
       if (!joinLimiter.take(socket.data.ip)) return ack({ ok: false, error: 'Terlalu banyak percobaan, tunggu sebentar' });
       const game = manager.games.get(pin);
       if (!game) return ack({ ok: false, error: 'PIN tidak ditemukan' });
-      const player = game.addPlayer(name);
+      const player = game.addPlayer(name, avatar);
       manager.bindPlayer(socket, game, player.id);
       ack({ ok: true, playerId: player.id, playerKey: player.key, name: player.name });
       manager.markDirty(pin);
@@ -321,11 +328,36 @@ export function attachRealtime(httpServer: HttpServer, store: Store, opts: { cor
       manager.markDirty(pin);
     });
 
-    on('player:answer', answerSchema, ({ questionIndex, choice }, ack) => {
+    const playerGame = () => {
       const { pin, role, playerId } = socket.data;
       const game = pin && role === 'player' ? manager.games.get(pin) : undefined;
-      if (!game || !playerId) return ack({ ok: false, error: 'Kamu belum bergabung ke game' });
-      game.answer(playerId, questionIndex, choice);
+      if (!game || !playerId) throw new GameFailure('NOT_FOUND');
+      return { game, playerId };
+    };
+
+    on('player:answer', answerSchema, ({ questionIndex, answer }, ack) => {
+      const { game, playerId } = playerGame();
+      game.answer(playerId, questionIndex, answer);
+      ack({ ok: true });
+    });
+
+    on('player:reroll', empty, (_d, ack) => {
+      const { game, playerId } = playerGame();
+      ack({ ok: true, name: game.rerollName(playerId) });
+    });
+
+    on('player:avatar', avatarUpdateSchema, ({ avatar }, ack) => {
+      const { game, playerId } = playerGame();
+      game.setAvatar(playerId, avatar);
+      ack({ ok: true });
+    });
+
+    const reactLimiter = new RateLimiter(1, 700);
+    on('player:react', reactSchema, ({ e }, ack) => {
+      const { game, playerId } = playerGame();
+      if (!reactLimiter.take(socket.id)) return ack({ ok: false, error: 'Pelan-pelan 😄' });
+      const p = game.players.get(playerId);
+      io.to(`host:${game.pin}`).emit('host:reaction', { e, name: p?.name ?? '', avatar: p?.avatar });
       ack({ ok: true });
     });
 
